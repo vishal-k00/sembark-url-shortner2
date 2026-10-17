@@ -1,0 +1,15 @@
+<?php
+namespace Tests\Feature;
+use App\Models\Company; use App\Models\ShortUrl; use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase; use Tests\TestCase;
+class UrlShortenerTest extends TestCase {
+ use RefreshDatabase;
+ private function company(string $name='Acme'): Company { return Company::create(['name'=>$name,'slug'=>strtolower($name).'-'.uniqid()]); }
+ private function user(string $role, ?int $companyId): User { return User::create(['name'=>ucfirst($role),'email'=>uniqid().$role.'@example.com','password'=>'password-password','role'=>$role,'company_id'=>$companyId]); }
+ public function test_admin_can_create_short_url(): void { $company=$this->company(); $admin=$this->user('admin',$company->id); $response=$this->actingAs($admin)->post('/short-urls',['original_url'=>'https://example.com/path']); $response->assertRedirect('/'); $this->assertDatabaseHas('short_urls',['company_id'=>$company->id,'created_by'=>$admin->id,'original_url'=>'https://example.com/path']); }
+ public function test_member_can_create_short_url(): void { $company=$this->company(); $member=$this->user('member',$company->id); $this->actingAs($member)->post('/short-urls',['original_url'=>'https://example.com'])->assertRedirect('/'); $this->assertDatabaseHas('short_urls',['created_by'=>$member->id]); }
+ public function test_superadmin_cannot_create_short_url(): void { $super=$this->user('super_admin',null); $this->actingAs($super)->post('/short-urls',['original_url'=>'https://example.com'])->assertForbidden(); $this->assertDatabaseCount('short_urls',0); }
+ public function test_admin_sees_only_own_company_urls(): void { $a=$this->company('A'); $b=$this->company('B'); $admin=$this->user('admin',$a->id); ShortUrl::create(['company_id'=>$a->id,'created_by'=>$admin->id,'code'=>'Abc12345','original_url'=>'https://a.example','clicks'=>0]); $other=$this->user('admin',$b->id); ShortUrl::create(['company_id'=>$b->id,'created_by'=>$other->id,'code'=>'Def12345','original_url'=>'https://b.example','clicks'=>0]); $response=$this->actingAs($admin)->get('/'); $response->assertSee('https://a.example')->assertDontSee('https://b.example'); }
+ public function test_member_sees_only_their_own_urls(): void { $c=$this->company(); $one=$this->user('member',$c->id); $two=$this->user('member',$c->id); ShortUrl::create(['company_id'=>$c->id,'created_by'=>$one->id,'code'=>'Abc12345','original_url'=>'https://one.example','clicks'=>0]); ShortUrl::create(['company_id'=>$c->id,'created_by'=>$two->id,'code'=>'Def12345','original_url'=>'https://two.example','clicks'=>0]); $this->actingAs($one)->get('/')->assertSee('https://one.example')->assertDontSee('https://two.example'); }
+ public function test_public_short_url_redirects_and_increments_clicks(): void { $c=$this->company(); $u=$this->user('member',$c->id); ShortUrl::create(['company_id'=>$c->id,'created_by'=>$u->id,'code'=>'Abc12345','original_url'=>'https://example.com/destination','clicks'=>0]); $this->get('/Abc12345')->assertRedirect('https://example.com/destination'); $this->assertDatabaseHas('short_urls',['code'=>'Abc12345','clicks'=>1]); }
+}
